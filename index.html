@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Anime / Cyberpunk / Neon Filters</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: 'Segoe UI', system-ui, sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; object-fit: cover; }
+
+        #controls {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 100; display: flex; gap: 12px;
+            background: rgba(0,0,0,0.75); backdrop-filter: blur(12px);
+            padding: 12px 18px; border-radius: 60px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        #controls::-webkit-scrollbar { display: none; }
+        button {
+            padding: 10px 22px; border: none; border-radius: 40px;
+            background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5);
+            font-size: 14px; font-weight: 600; letter-spacing: 0.5px;
+            cursor: pointer; transition: all 0.25s ease;
+            text-transform: uppercase;
+        }
+        button:hover {
+            background: rgba(255,255,255,0.12); color: #fff;
+        }
+        button.active {
+            background: linear-gradient(135deg, #ff00cc, #3333ff);
+            color: #fff; box-shadow: 0 0 24px rgba(255,0,204,0.4);
+        }
+        #label {
+            position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+            z-index: 100;
+            color: rgba(255,255,255,0.25); font-size: 13px;
+            font-weight: 500; letter-spacing: 3px; text-transform: uppercase;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="label">Real-Time Filter</div>
+    <canvas id="canvas"></canvas>
+    <div id="controls">
+        <button data-filter="anime" class="active">Anime</button>
+        <button data-filter="cyberpunk">Cyberpunk</button>
+        <button data-filter="neon">Neon</button>
+        <button data-filter="vhs">VHS</button>
+        <button data-filter="noir">Noir</button>
+        <button data-filter="watercolor">Watercolor</button>
+        <button data-filter="pixel">Pixel</button>
+        <button data-filter="glitch">Glitch</button>
+        <button data-filter="thermal">Thermal</button>
+        <button data-filter="popart">Pop Art</button>
+        <button data-filter="dreamy">Dreamy</button>
+        <button data-filter="comic">Comic</button>
+        <button data-filter="none">None</button>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
