@@ -1,0 +1,1507 @@
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: index.html
+ACTION: Created
+================================================================================
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Realtime Filters</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="controls">
+        <div class="controls-header">
+            <h1>Realtime Filters</h1>
+            <div class="filter-info">
+                <span id="current-filter-label">Anime</span>
+            </div>
+        </div>
+        <div class="controls-body">
+            <button class="active" data-filter="anime">Anime</button>
+            <button data-filter="cyberpunk">Cyberpunk</button>
+            <button data-filter="neon">Neon</button>
+            <button data-filter="vhs">VHS</button>
+            <button data-filter="noir">Noir</button>
+            <button data-filter="watercolor">Watercolor</button>
+            <button data-filter="pixel">Pixel</button>
+            <button data-filter="glitch">Glitch</button>
+            <button data-filter="thermal">Thermal</button>
+            <button data-filter="popart">Pop Art</button>
+            <button data-filter="dreamy">Dreamy</button>
+            <button data-filter="comic">Comic</button>
+        </div>
+        <div class="controls-footer">
+            <p>Use keyboard arrow keys to switch filters</p>
+        </div>
+    </div>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="main.js"></script>
+</body>
+</html>
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: style.css
+ACTION: Created
+================================================================================
+body { margin: 0; padding: 0; }
+canvas { display: block; }
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: main.js
+ACTION: Created
+================================================================================
+'use strict';
+
+/**
+ * main.js — Realtime Filters v2.0
+ *
+ * WebGL2-powered realtime camera filters using Three.js ShaderMaterials.
+ * 12 GLSL fragment shaders (anime, cyberpunk, neon, vhs, noir, watercolor,
+ * pixel, glitch, thermal, popart, dreamy, comic) fed from webcam via
+ * VideoTexture.
+ *
+ * Architecture:
+ *   Vertex shader passes UV + fragment position to each fragment shader.
+ *   Uniforms: u_texture (sampler2D), u_time (float), u_resolution (vec2).
+ *   Single render pass per frame — no multi-pass compositing.
+ *
+ * Keyboard: Left/Right arrows cycle filters. 'S' saves screenshot.
+ */
+
+(function() {
+
+    // ─── VIDEO TEXTURE SETUP ──────────────────────────────────────────────────────
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+
+    // Start webcam
+    async function startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false
+            });
+            video.srcObject = stream;
+            await new Promise(resolve => { video.onloadedmetadata = () => { video.play(); resolve(); }; });
+        } catch (e) {
+            alert('Camera access required for this app.');
+            throw e;
+        }
+    }
+
+    await startCamera();
+
+    // ─── UNIFORMS (shared across all shaders) ─────────────────────────────────────
+    const uniforms = {
+        u_time:      { value: 0 },
+        u_resolution:{ value: { x: window.innerWidth, y: window.innerHeight } },
+        u_texture:   { value: null }
+    };
+
+    // ─── VERTEX SHADER (shared) ───────────────────────────────────────────────────
+    const vertexShader = `
+        varying vec2 vUv;
+        varying vec2 vPos;
+        void main() {
+            vUv = uv;
+            vPos = position.xy;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    `;
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // FRAGMENT SHADERS
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    // ── Anime ─────────────────────────────────────────────────────────────────────
+    const animeFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Cel shading: quantize to 6 levels per channel
+            col.rgb = floor(col.rgb * 6.0) / 6.0;
+
+            // Edge detection (Sobel on luminance)
+            vec2 px = 1.0 / u_resolution;
+            float dx = texture2D(u_texture, uv + vec2(px.x, 0.0)).r - texture2D(u_texture, uv - vec2(px.x, 0.0)).r;
+            float dy = texture2D(u_texture, uv + vec2(0.0, px.y)).r - texture2D(u_texture, uv - vec2(0.0, px.y)).r;
+            float edge = length(vec2(dx, dy));
+
+            // Soft outline
+            float outline = smoothstep(0.05, 0.25, edge);
+            col.rgb = mix(col.rgb, vec3(0.0), outline * 0.85);
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Cyberpunk ─────────────────────────────────────────────────────────────────
+    const cyberpunkFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Desaturate slightly
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            col.rgb = mix(col.rgb, vec3(gray), 0.15);
+
+            // Neon cyan/pink glow on bright regions
+            float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
+            float bright = smoothstep(0.7, 1.0, luma);
+            vec3 neon = vec3(0.0, 0.9, 0.9) * bright * 0.7
+                      + vec3(0.9, 0.0, 0.9) * bright * 0.5;
+            col.rgb += neon;
+
+            // Scanlines
+            float scan = sin(uv.y * u_resolution.y * 2.0) * 0.08;
+            col.rgb *= 0.92 + scan;
+
+            // CRT distortion
+            uv.x += sin(uv.y * 10.0 + u_time * 0.5) * 0.015;
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Neon ──────────────────────────────────────────────────────────────────────
+    const neonFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Boost saturation
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            col.rgb = mix(col.rgb, col.rgb * 1.6, 0.5);
+            col.rgb = mix(vec3(gray), col.rgb, 1.4);
+
+            // Color pulsing
+            float pulse = sin(u_time * 2.0) * 0.5 + 0.5;
+            col.rgb *= mix(vec3(1.0), vec3(0.7, 0.1, 0.9), pulse * 0.3);
+
+            // Radial glow
+            float dist = length(uv - 0.5);
+            float glow = smoothstep(0.7, 0.2, dist);
+            col.rgb += vec3(0.9, 0.1, 0.8) * glow * 0.4;
+
+            // Motion trails
+            float trail = sin(uv.x * 8.0 + u_time * 2.5) * 0.08;
+            col.rgb += vec3(0.8, 0.2, 1.0) * trail;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── VHS ───────────────────────────────────────────────────────────────────────
+    const vhsFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+
+            // Horizontal jitter (tape tracking noise)
+            float jitter = sin(uv.y * u_resolution.y * 0.5 + u_time * 4.0) * 0.01;
+            uv.x += jitter;
+
+            // Color bleeding (shift chroma)
+            float shift = sin(u_time * 3.0) * 0.005;
+            float r = texture2D(u_texture, uv + vec2(shift, 0.0)).r;
+            float g = texture2D(u_texture, uv).g;
+            float b = texture2D(u_texture, uv - vec2(shift, 0.0)).b;
+
+            vec4 col = vec4(r, g, b, 1.0);
+
+            // Desaturate
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            col.rgb = mix(col.rgb, vec3(gray), 0.3);
+
+            // Scanlines
+            float scan = mod(uv.y * u_resolution.y, 2.0);
+            col.rgb *= 0.6 + 0.4 * step(1.0, scan);
+
+            // VHS noise overlay
+            float noise = fract(sin(dot(uv * u_resolution, vec2(12.9898, 78.233))) * 43758.5453);
+            col.rgb += noise * 0.04;
+
+            // Tape artifacts (horizontal lines)
+            float tape = step(0.998, fract(sin(uv.y * 100.0 + u_time) * 1000.0));
+            col.rgb += vec3(0.8, 0.9, 1.0) * tape * 0.3;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Film Noir ─────────────────────────────────────────────────────────────────
+    const noirFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Full desaturation
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            col.rgb = vec3(gray);
+
+            // High contrast (hard curve)
+            col.rgb = smoothstep(0.15, 0.85, col.rgb);
+
+            // Grain
+            float noise = fract(sin(dot(uv * u_resolution, vec2(12.9898, 78.233))) * 43758.5453);
+            col.rgb += (noise - 0.5) * 0.08;
+
+            // Vignette
+            float dist = length(uv - 0.5);
+            col.rgb *= 1.0 - smoothstep(0.25, 0.8, dist) * 0.6;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Watercolor ────────────────────────────────────────────────────────────────
+    const watercolorFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec2 px = 1.0 / u_resolution;
+
+            // Multi-sample blur for watercolor effect
+            vec4 col = vec4(0.0);
+            for (float x = -2.0; x <= 2.0; x += 1.0) {
+                for (float y = -2.0; y <= 2.0; y += 1.0) {
+                    vec2 offset = vec2(x, y) * px * 2.0;
+                    col += texture2D(u_texture, uv + offset);
+                }
+            }
+            col /= 25.0;
+
+            // Soft saturation boost
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+            col.rgb = mix(vec3(gray), col.rgb, 1.3);
+
+            // Subtle color bleeding
+            col.rgb += (texture2D(u_texture, uv + vec2(px.x * 3.0, 0.0)).rgb -
+                        texture2D(u_texture, uv - vec2(px.x * 3.0, 0.0)).rgb) * 0.1;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Pixel Art ─────────────────────────────────────────────────────────────────
+    const pixelFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            // Pixelation: 80x60 effective resolution
+            vec2 pixelSize = vec2(1.0) / vec2(80.0, 60.0);
+            vec2 uv = floor(vUv / pixelSize) * pixelSize;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Posterize to limited palette
+            col.rgb = floor(col.rgb * 4.0) / 4.0;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Glitch ────────────────────────────────────────────────────────────────────
+    const glitchFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+
+            // Random horizontal slice shift
+            float glitchProb = 0.1;
+            float slice = floor(uv.y * 40.0);
+            float glitch = step(1.0 - glitchProb,
+                fract(sin(dot(vec2(slice, u_time), vec2(12.9898, 78.233))) * 43758.5453));
+
+            // Shift amount
+            float shift = glitch * (fract(sin(dot(vec2(slice, u_time * 0.5), vec2(42.0, 17.0))) * 43758.5453) - 0.5) * 0.1;
+
+            // RGB channel split
+            float r = texture2D(u_texture, uv + vec2(shift * 1.5 * glitch, 0.0)).r;
+            float g = texture2D(u_texture, uv + vec2(shift * glitch, 0.0)).g;
+            float b = texture2D(u_texture, uv).b;
+
+            vec4 col = vec4(r, g, b, 1.0);
+
+            // White flash on glitch
+            float flash = step(0.98, fract(sin(dot(vec2(slice, u_time * 2.0), vec2(99.0, 33.0))) * 43758.5453));
+            col.rgb = mix(col.rgb, vec3(1.0), flash * 0.5);
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Thermal ───────────────────────────────────────────────────────────────────
+    const thermalFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Luminance-based heat map
+            float luma = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+
+            // Thermal palette: black -> blue -> purple -> red -> yellow -> white
+            vec3 thermal;
+            if (luma < 0.2)      thermal = mix(vec3(0.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), luma * 5.0);
+            else if (luma < 0.4) thermal = mix(vec3(0.0, 0.0, 1.0), vec3(0.5, 0.0, 1.0), (luma - 0.2) * 5.0);
+            else if (luma < 0.6) thermal = mix(vec3(0.5, 0.0, 1.0), vec3(1.0, 0.0, 0.0), (luma - 0.4) * 5.0);
+            else if (luma < 0.8) thermal = mix(vec3(1.0, 0.0, 0.0), vec3(1.0, 1.0, 0.0), (luma - 0.6) * 5.0);
+            else                 thermal = mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 1.0, 1.0), (luma - 0.8) * 5.0);
+
+            col.rgb = thermal;
+
+            // Subtle noise for sensor feel
+            float noise = fract(sin(dot(uv * u_resolution, vec2(12.9898, 78.233))) * 43758.5453);
+            col.rgb += (noise - 0.5) * 0.03;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Pop Art ───────────────────────────────────────────────────────────────────
+    const popArtFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Halftone-like posterization
+            float gray = dot(col.rgb, vec3(0.299, 0.587, 0.114));
+
+            // Threshold to 4 levels with hard edges
+            float level = 0.0;
+            if (gray > 0.75)      level = 1.0;
+            else if (gray > 0.5)  level = 0.85;
+            else if (gray > 0.25) level = 0.4;
+            else                  level = 0.1;
+
+            // Assign Pop Art colors
+            float dots = sin(uv.x * 40.0) * sin(uv.y * 40.0);
+            float pattern = step(0.0, dots);
+
+            vec3 pop;
+            if (level > 0.8)      pop = vec3(1.0, 0.9, 0.0);  // Yellow
+            else if (level > 0.6) pop = vec3(0.0, 0.8, 1.0);  // Cyan
+            else if (level > 0.3) pop = vec3(1.0, 0.2, 0.3);  // Red
+            else                  pop = vec3(0.0, 0.0, 0.0);  // Black
+
+            // Halftone dots overlay
+            float halftone = step(0.5, fract(sin(uv.x * 100.0 + uv.y * 100.0) * 1000.0));
+            pop = mix(pop, vec3(1.0), halftone * 0.1);
+
+            col.rgb = pop;
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Dreamy ────────────────────────────────────────────────────────────────────
+    const dreamyFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec2 px = 1.0 / u_resolution;
+
+            // Blur (simple box)
+            vec4 col = vec4(0.0);
+            for (float x = -3.0; x <= 3.0; x += 1.0) {
+                for (float y = -3.0; y <= 3.0; y += 1.0) {
+                    col += texture2D(u_texture, uv + vec2(x, y) * px * 1.5);
+                }
+            }
+            col /= 49.0;
+
+            // Pastel boost
+            col.rgb = mix(col.rgb, vec3(1.0), 0.15);
+
+            // Soft bloom
+            float luma = dot(col.rgb, vec3(0.2126, 0.7152, 0.0722));
+            float bloom = smoothstep(0.5, 1.0, luma);
+            col.rgb += col.rgb * bloom * 0.3;
+
+            // Floating dust motes
+            float dust = fract(sin(dot(uv * u_resolution * 0.1, vec2(12.9898, 78.233) + u_time * 0.1)) * 43758.5453);
+            col.rgb += vec3(1.0, 0.9, 0.8) * step(0.995, dust) * 0.3;
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ── Comic ─────────────────────────────────────────────────────────────────────
+    const comicFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+        varying vec2 vUv;
+
+        void main() {
+            vec2 uv = vUv;
+            vec2 px = 1.0 / u_resolution;
+            vec4 col = texture2D(u_texture, uv);
+
+            // Quantize colors (comic palette)
+            col.r = floor(col.r * 6.0) / 6.0;
+            col.g = floor(col.g * 6.0) / 6.0;
+            col.b = floor(col.b * 6.0) / 6.0;
+
+            // Thick outlines via Sobel
+            float dx = texture2D(u_texture, uv + vec2(px.x, 0.0)).r - texture2D(u_texture, uv - vec2(px.x, 0.0)).r;
+            float dy = texture2D(u_texture, uv + vec2(0.0, px.y)).r - texture2D(u_texture, uv - vec2(0.0, px.y)).r;
+            float edge = length(vec2(dx, dy));
+
+            // Overlay outlines
+            float outline = 1.0 - smoothstep(0.06, 0.2, edge);
+            col.rgb = mix(col.rgb, vec3(0.0), outline * 0.9);
+
+            gl_FragColor = col;
+        }
+    `;
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // THREE.JS SCENE SETUP
+    // ═══════════════════════════════════════════════════════════════════════════════
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const geometry = new THREE.PlaneGeometry(2, 2);
+
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const shaders = {
+        anime:     animeFrag,
+        cyberpunk: cyberpunkFrag,
+        neon:      neonFrag,
+        vhs:       vhsFrag,
+        noir:      noirFrag,
+        watercolor:watercolorFrag,
+        pixel:     pixelFrag,
+        glitch:    glitchFrag,
+        thermal:   thermalFrag,
+        popart:    popArtFrag,
+        dreamy:    dreamyFrag,
+        comic:     comicFrag
+    };
+
+    let currentFilter = 'anime';
+    let material = null;
+    let mesh = null;
+
+    // Passthrough shader for "none" filter (raw webcam)
+    const passthroughFrag = `
+        precision highp float;
+        uniform sampler2D u_texture;
+        varying vec2 vUv;
+        void main() {
+            gl_FragColor = texture2D(u_texture, vUv);
+        }
+    `;
+
+    function applyFilter(name) {
+        if (name === 'none') {
+            currentFilter = name;
+            document.querySelectorAll('#controls button').forEach(b => {
+                b.classList.toggle('active', b.dataset.filter === name);
+            });
+            if (material) material.dispose();
+            material = new THREE.ShaderMaterial({
+                uniforms: uniforms,
+                vertexShader: vertexShader,
+                fragmentShader: passthroughFrag,
+                transparent: false,
+                depthTest: false
+            });
+            if (mesh) scene.remove(mesh);
+            mesh = new THREE.Mesh(geometry, material);
+            scene.add(mesh);
+            return;
+        }
+        if (!shaders[name]) return;
+        currentFilter = name;
+
+        // Update UI
+        document.querySelectorAll('#controls button').forEach(b => {
+            b.classList.toggle('active', b.dataset.filter === name);
+        });
+
+        // Dispose old material
+        if (material) material.dispose();
+
+        // Create new shader material
+        material = new THREE.ShaderMaterial({
+            uniforms: uniforms,
+            vertexShader: vertexShader,
+            fragmentShader: shaders[name],
+            transparent: false,
+            depthTest: false
+        });
+
+        // Replace mesh
+        if (mesh) scene.remove(mesh);
+        mesh = new THREE.Mesh(geometry, material);
+        scene.add(mesh);
+    }
+
+    // ─── RESIZE ──────────────────────────────────────────────────────────────────
+    function onResize() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        canvas.width = w;
+        canvas.height = h;
+        renderer.setSize(w, h);
+        uniforms.u_resolution.value.set(w, h);
+    }
+    window.addEventListener('resize', onResize);
+    onResize();
+
+    // ─── RENDER LOOP ─────────────────────────────────────────────────────────────
+    let startTime = performance.now();
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        uniforms.u_time.value = (performance.now() - startTime) * 0.001;
+
+        // Update video texture
+        if (videoTexture && video.readyState >= video.HAVE_ENOUGH_DATA) {
+            videoTexture.needsUpdate = true;
+            uniforms.u_texture.value = videoTexture;
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    // ─── INIT ────────────────────────────────────────────────────────────────────
+    applyFilter('anime');
+    animate();
+
+    // ─── UI EVENT BINDING ────────────────────────────────────────────────────────
+    document.querySelectorAll('#controls button').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const filterName = btn.dataset.filter;
+            if (filterName) applyFilter(filterName);
+        });
+    });
+
+})();
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: filters/FilterEngine.js
+ACTION: Created
+================================================================================
+'use strict';
+
+/**
+ * FilterEngine.js — WebGL2 multi-pass filter engine
+ *
+ * Renders camera frames through configurable real-time shader pipelines
+ * using raw WebGL2 (no Three.js). Supports multi-pass techniques:
+ *
+ *   - Bilateral smooth (2 separable passes)
+ *   - Gaussian blur   (2 separable passes)
+ *   - Sobel edge map  (single pass)
+ *   - Mirror (H-flip) (single pass)
+ *   - Final compose   (1 pass combining smoothed + edge data)
+ *
+ * Filters implemented:
+ *   normal, anime, cartoon, sketch, watercolor, neon, dreamy,
+ *   cyberpunk, oilpainting, vintage, pixelate, emboss, thermal,
+ *   infrared, glitch
+ *
+ * Every filter is multi-pass except the 'normal' passthrough.
+ * Passes are stored as on-screen FBO ping-pong to save GPU memory.
+ *
+ * Usage:
+ *   const engine = new FilterEngine(canvas);
+ *   engine.switchFilter('anime');
+ *   engine.render(videoElement, deltaTime);
+ */
+
+class FilterEngine {
+
+  /* ── Constructor ── */
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.gl = canvas.getContext('webgl2', { alpha: false, antialias: false, preserveDrawingBuffer: true });
+    if (!this.gl) throw new Error('WebGL2 not supported');
+
+    this.time = 0;
+    this.intensity = 0.75;
+    this.currentFilter = 'normal';
+
+    this._initShaders();
+    this._initFbos();
+    this._initVideoTexture();
+    this._initQuad();
+  }
+
+  /* ═══════════════════════════════════════════
+     SHADER INIT
+  ═══════════════════════════════════════════ */
+
+  _initShaders() {
+    const gl = this.gl;
+    const L = {};  // uniform locations per program
+
+    /* ── Vertex shader (shared) ── */
+    const vsSrc = `#version 300 es
+      in vec2 a_pos;
+      out vec2 vUv;
+      void main() {
+        vUv = a_pos * 0.5 + 0.5;
+        gl_Position = vec4(a_pos, 0.0, 1.0);
+      }
+    `;
+
+    /* ── Fragment shaders ── */
+
+    // Each shader receives up to 3 textures via samplers:
+    //   u_tex  — primary (processed) input
+    //   u_orig — original camera frame (for blend-back)
+    //   u_edge — Sobel edge map (from _sobel)
+
+    const shaderSrc = {
+
+      /* -- Mirror flip (H-flip) -- */
+      flip: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          fragColor = texture(u_tex, vec2(1.0 - vUv.x, vUv.y));
+        }
+      `,
+
+      /* -- Normal (passthrough) -- */
+      normal: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() { fragColor = texture(u_tex, vUv); }
+      `,
+
+      /* -- Bilateral smooth H -- */
+      bilH: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform float u_t;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = vec4(0); float w = 0.;
+          for (int i = -4; i <= 4; i++) {
+            float fi = float(i);
+            vec2 off = vec2(fi * u_px.x, 0.);
+            vec4 s = texture(u_tex, vUv + off);
+            float kw = exp(-(fi*fi)/(2.*u_t*u_t));
+            float rw = exp(-dot(s.rgb-c.rgb,s.rgb-c.rgb)/(2.*.15*.15));
+            c += s * kw * rw; w += kw * rw;
+          }
+          fragColor = c / w;
+        }
+      `,
+
+      /* -- Bilateral smooth V -- */
+      bilV: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform float u_t;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = vec4(0); float w = 0.;
+          for (int i = -4; i <= 4; i++) {
+            float fi = float(i);
+            vec2 off = vec2(0., fi * u_px.y);
+            vec4 s = texture(u_tex, vUv + off);
+            float kw = exp(-(fi*fi)/(2.*u_t*u_t));
+            float rw = exp(-dot(s.rgb-c.rgb,s.rgb-c.rgb)/(2.*.15*.15));
+            c += s * kw * rw; w += kw * rw;
+          }
+          fragColor = c / w;
+        }
+      `,
+
+      /* -- Gaussian H -- */
+      gaussH: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv) * 0.227;
+          c += texture(u_tex, vUv + vec2( u_px.x, 0.)) * 0.195;
+          c += texture(u_tex, vUv - vec2( u_px.x, 0.)) * 0.195;
+          c += texture(u_tex, vUv + vec2( u_px.x*2., 0.)) * 0.117;
+          c += texture(u_tex, vUv - vec2( u_px.x*2., 0.)) * 0.117;
+          c += texture(u_tex, vUv + vec2( u_px.x*3., 0.)) * 0.049;
+          c += texture(u_tex, vUv - vec2( u_px.x*3., 0.)) * 0.049;
+          c += texture(u_tex, vUv + vec2( u_px.x*4., 0.)) * 0.015;
+          c += texture(u_tex, vUv - vec2( u_px.x*4., 0.)) * 0.015;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Gaussian V -- */
+      gaussV: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv) * 0.227;
+          c += texture(u_tex, vUv + vec2(0.,  u_px.y)) * 0.195;
+          c += texture(u_tex, vUv - vec2(0.,  u_px.y)) * 0.195;
+          c += texture(u_tex, vUv + vec2(0.,  u_px.y*2.)) * 0.117;
+          c += texture(u_tex, vUv - vec2(0.,  u_px.y*2.)) * 0.117;
+          c += texture(u_tex, vUv + vec2(0.,  u_px.y*3.)) * 0.049;
+          c += texture(u_tex, vUv - vec2(0.,  u_px.y*3.)) * 0.049;
+          c += texture(u_tex, vUv + vec2(0.,  u_px.y*4.)) * 0.015;
+          c += texture(u_tex, vUv - vec2(0.,  u_px.y*4.)) * 0.015;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Sobel edge -- */
+      sobel: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          float tl = texture(u_tex, vUv + vec2(-u_px.x,  u_px.y)).r;
+          float t  = texture(u_tex, vUv + vec2( 0.,       u_px.y)).r;
+          float tr = texture(u_tex, vUv + vec2( u_px.x,  u_px.y)).r;
+          float l  = texture(u_tex, vUv + vec2(-u_px.x,  0.)).r;
+          float r  = texture(u_tex, vUv + vec2( u_px.x,  0.)).r;
+          float bl = texture(u_tex, vUv + vec2(-u_px.x, -u_px.y)).r;
+          float b  = texture(u_tex, vUv + vec2( 0.,      -u_px.y)).r;
+          float br = texture(u_tex, vUv + vec2( u_px.x, -u_px.y)).r;
+          float gx = -tl - 2.*l - bl + tr + 2.*r + br;
+          float gy = -tl - 2.*t - tr + bl + 2.*b + br;
+          float e  = length(vec2(gx, gy));
+          fragColor = vec4(vec3(e), 1.);
+        }
+      `,
+
+      /* -- Anime (cel-shading) -- */
+      anime: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_edge;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv);
+          c.rgb = floor(c.rgb * 6.) / 6.;
+          float e = texture(u_edge, vUv).r;
+          c.rgb = mix(c.rgb, vec3(0.), smoothstep(.05, .25, e) * .75);
+          fragColor = c;
+        }
+      `,
+
+      /* -- Cartoon (softer cel + edge) -- */
+      cartoon: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_edge;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv);
+          c.rgb = floor(c.rgb * 8.) / 8.;
+          float e = texture(u_edge, vUv).r;
+          c.rgb = mix(c.rgb, vec3(0.), smoothstep(.08, .35, e) * .6);
+          fragColor = c;
+        }
+      `,
+
+      /* -- Sketch (dodge-blend) -- */
+      sketch: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_orig;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 blurred = texture(u_tex, vUv);
+          vec4 orig    = texture(u_orig, vUv);
+          vec4 result  = min(orig / (1. - blurred + .001), 1.);
+          float gray = dot(result.rgb, vec3(.299, .587, .114));
+          fragColor = vec4(vec3(gray), 1.);
+        }
+      `,
+
+      /* -- Watercolor -- */
+      watercolor: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_orig;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 smooth = texture(u_tex, vUv);
+          vec4 orig   = texture(u_orig, vUv);
+          vec4 c = mix(orig, smooth, .65);
+          float gray = dot(c.rgb, vec3(.299, .587, .114));
+          c.rgb = mix(vec3(gray), c.rgb, 1.3);
+          fragColor = c;
+        }
+      `,
+
+      /* -- Neon (edge glow) -- */
+      neon: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_orig;
+        uniform sampler2D u_edge;
+        uniform float u_time;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 blurred = texture(u_tex, vUv);
+          vec4 orig    = texture(u_orig, vUv);
+          float e      = texture(u_edge, vUv).r;
+          vec3 glow    = vec3(0., .9, .9) * e * .8
+                       + vec3(.9, 0., .9) * e * .6;
+          vec3 pulse   = vec3(1., .2, .8) * (sin(u_time * 2.) * .5 + .5) * e * .3;
+          vec4 result  = mix(orig, vec4(blurred.rgb + glow + pulse, 1.), .6);
+          fragColor = result;
+        }
+      `,
+
+      /* -- Dreamy (soft bloom) -- */
+      dreamy: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_orig;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 blurred = texture(u_tex, vUv);
+          vec4 orig    = texture(u_orig, vUv);
+          vec4 c = mix(orig, blurred, .55);
+          c.rgb = mix(c.rgb, vec3(1.), .12);
+          float luma = dot(c.rgb, vec3(.2126, .7152, .0722));
+          c.rgb += c.rgb * smoothstep(.5, 1., luma) * .25;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Cyberpunk -- */
+      cyberpunk: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform sampler2D u_edge;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 orig = texture(u_tex, vUv);
+          float e   = texture(u_edge, vUv).r;
+          float gray = dot(orig.rgb, vec3(.299, .587, .114));
+          vec3 result = mix(vec3(gray), orig.rgb, .3);
+          result += vec3(0., .9, .9) * e * .5;
+          result += vec3(.9, 0., .9) * e * .35;
+          float scan = sin(vUv.y * 600.) * .05;
+          result *= .95 + scan;
+          fragColor = vec4(result, 1.);
+        }
+      `,
+
+      /* -- Oil Paint (mode-based color quantization) -- */
+      oilpainting: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform float u_t;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = vec4(0);
+          float total = 0.;
+          for (float y = -4.; y <= 4.; y += 1.)
+            for (float x = -4.; x <= 4.; x += 1.) {
+              vec2 off = vec2(x, y) * u_px * 4.;
+              vec4 s = texture(u_tex, vUv + off);
+              float w = exp(-(x*x + y*y) / (2.*u_t*u_t));
+              c += s * w; total += w;
+            }
+          c /= total;
+          c.rgb = floor(c.rgb * 5.) / 5.;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Vintage (sepia + vignette + grain) -- */
+      vintage: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv);
+          float gray = dot(c.rgb, vec3(.299, .587, .114));
+          vec3 sepia = vec3(gray) * vec3(1.2, .85, .5);
+          c.rgb = mix(c.rgb, sepia, .7);
+          float dist = length(vUv - .5);
+          c.rgb *= 1. - smoothstep(.2, .8, dist) * .5;
+          float grain = fract(sin(dot(vUv * 200., vec2(12.9898, 78.233))) * 43758.5453);
+          c.rgb += (grain - .5) * .06;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Pixelate (block downsampling) -- */
+      pixelate: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec2 res = vec2(80., 60.);
+          vec2 uv = floor(vUv * res) / res;
+          vec4 c = texture(u_tex, uv);
+          c.rgb = floor(c.rgb * 4.) / 4.;
+          fragColor = c;
+        }
+      `,
+
+      /* -- Emboss (convolution) -- */
+      emboss: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform vec2 u_px;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          float tl = texture(u_tex, vUv + vec2(-u_px.x,  u_px.y)).r;
+          float t  = texture(u_tex, vUv + vec2( 0.,       u_px.y)).r;
+          float tr = texture(u_tex, vUv + vec2( u_px.x,  u_px.y)).r;
+          float l  = texture(u_tex, vUv + vec2(-u_px.x,  0.)).r;
+          float c  = texture(u_tex, vUv).r;
+          float r  = texture(u_tex, vUv + vec2( u_px.x,  0.)).r;
+          float bl = texture(u_tex, vUv + vec2(-u_px.x, -u_px.y)).r;
+          float b  = texture(u_tex, vUv + vec2( 0.,      -u_px.y)).r;
+          float br = texture(u_tex, vUv + vec2( u_px.x, -u_px.y)).r;
+          float e = -tl - t - tr + l + c + r + bl + b + br;
+          fragColor = vec4(vec3(e * .8 + .5), 1.);
+        }
+      `,
+
+      /* -- Thermal (heat map) -- */
+      thermal: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv);
+          float luma = dot(c.rgb, vec3(.299, .587, .114));
+          vec3 thermal;
+          if (luma < .2)      thermal = mix(vec3(0.,0.,0.), vec3(0.,0.,1.), luma*5.);
+          else if (luma < .4) thermal = mix(vec3(0.,0.,1.), vec3(.5,0.,1.), (luma-.2)*5.);
+          else if (luma < .6) thermal = mix(vec3(.5,0.,1.), vec3(1.,0.,0.), (luma-.4)*5.);
+          else if (luma < .8) thermal = mix(vec3(1.,0.,0.), vec3(1.,1.,0.), (luma-.6)*5.);
+          else                thermal = mix(vec3(1.,1.,0.), vec3(1.,1.,1.), (luma-.8)*5.);
+          float noise = fract(sin(dot(vUv * 200., vec2(12.9898, 78.233))) * 43758.5453);
+          fragColor = vec4(thermal + (noise-.5)*.03, 1.);
+        }
+      `,
+
+      /* -- Infrared -- */
+      infrared: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec4 c = texture(u_tex, vUv);
+          float r = c.r * 1.2;
+          float g = c.g * .3;
+          float b = c.b * .2;
+          float glow = r - g - b;
+          vec3 ir = vec3(glow, glow*.5, glow*.2);
+          ir = clamp(ir, 0., 1.);
+          float noise = fract(sin(dot(vUv * 200., vec2(12.9898, 78.233))) * 43758.5453);
+          fragColor = vec4(ir + (noise-.5)*.02, 1.);
+        }
+      `,
+
+      /* -- Glitch -- */
+      glitch: `#version 300 es
+        precision highp float;
+        uniform sampler2D u_tex;
+        uniform float u_time;
+        in vec2 vUv;
+        out vec4 fragColor;
+        void main() {
+          vec2 uv = vUv;
+          float slice = floor(uv.y * 40.);
+          float glitch = step(.9, fract(sin(dot(vec2(slice, u_time), vec2(12.9898, 78.233))) * 43758.5453));
+          float shift = glitch * (fract(sin(dot(vec2(slice, u_time*.5), vec2(42., 17.))) * 43758.5453) - .5) * .1;
+          float r = texture(u_tex, uv + vec2(shift*1.5*glitch, 0.)).r;
+          float g = texture(u_tex, uv + vec2(shift*glitch, 0.)).g;
+          float b = texture(u_tex, uv).b;
+          vec4 col = vec4(r, g, b, 1.);
+          float flash = step(.98, fract(sin(dot(vec2(slice, u_time*2.), vec2(99., 33.))) * 43758.5453));
+          col.rgb = mix(col.rgb, vec3(1.), flash * .5);
+          fragColor = col;
+        }
+      `
+    };
+
+    /* ── Compile all programs ── */
+    const vs = this._compile(gl.VERTEX_SHADER, vsSrc);
+    for (const [name, src] of Object.entries(shaderSrc)) {
+      const fs = this._compile(gl.FRAGMENT_SHADER, src);
+      const pg = gl.createProgram();
+      gl.attachShader(pg, vs);
+      gl.attachShader(pg, fs);
+      gl.linkProgram(pg);
+
+      /* Store uniform locations */
+      const locs = {};
+      for (const uname of ['u_tex','u_orig','u_edge','u_time','u_t','u_px']) {
+        locs[uname] = gl.getUniformLocation(pg, uname);
+      }
+      L[name] = locs;
+      this['_pg_' + name] = pg;
+
+      gl.deleteShader(fs);
+    }
+    gl.deleteShader(vs);
+    this._L = L;
+  }
+
+  /* ── Compile a shader ── */
+  _compile(type, src) {
+    const gl = this.gl;
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return s;
+  }
+
+  /* ═══════════════════════════════════════════
+     FBO INIT (RGBA8)
+  ═══════════════════════════════════════════ */
+
+  _initFbos() {
+    const gl    = this.gl;
+    const w     = gl.drawingBufferWidth;
+    const h     = gl.drawingBufferHeight;
+    this._fbo   = [];
+    for (let i = 0; i < 4; i++) {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      const fb = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+      this._fbo.push({ fb, tex });
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /* ── Video upload texture ── */
+  _initVideoTexture() {
+    const gl = this.gl;
+    this._videoTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this._videoTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+
+  /* ── Fullscreen quad ── */
+  _initQuad() {
+    const gl   = this.gl;
+    const verts = new Float32Array([-1,-1, 3,-1, -1,3]);
+    this._vao  = gl.createVertexArray();
+    gl.bindVertexArray(this._vao);
+    const buf  = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  }
+
+  /* ═══════════════════════════════════════════
+     DRAW — internal multi-pass workhorse
+  ═══════════════════════════════════════════ */
+
+  _draw(passName, tex, orig, edge, targetFbo) {
+    const gl = this.gl;
+    const pg = this['_pg_' + passName];
+    if (!pg) return;
+    const L = this._L[passName];
+
+    gl.useProgram(pg);
+
+    /* Bind target */
+    if (targetFbo) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, targetFbo.fb);
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    }
+
+    /* Bind textures */
+    let unit = 0;
+    const bind = (uname, t) => {
+      if (L[uname] == null || !t) return;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.uniform1i(L[uname], unit++);
+    };
+    bind('u_tex',  tex);
+    bind('u_orig', orig);
+    bind('u_edge', edge);
+
+    if (L.u_t    != null) gl.uniform1f(L.u_t,    this.intensity);
+    if (L.u_time != null) gl.uniform1f(L.u_time,  this.time);
+    if (L.u_px   != null) gl.uniform2f(L.u_px,    1/this.canvas.width, 1/this.canvas.height);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /* ── Bilateral smooth: 2 passes → returns smoothed texture ── */
+  _bilateral(src) {
+    this._draw('bilH', src,              null, null, this._fbo[0]);
+    this._draw('bilV', this._fbo[0].tex, null, null, this._fbo[1]);
+    return this._fbo[1].tex;
+  }
+
+  /* ── Gaussian blur: 2 passes → returns blurred texture ── */
+  _gaussian(src) {
+    this._draw('gaussH', src,              null, null, this._fbo[0]);
+    this._draw('gaussV', this._fbo[0].tex, null, null, this._fbo[1]);
+    return this._fbo[1].tex;
+  }
+
+  /* ── Sobel edge map ── */
+  _sobel(src) {
+    this._draw('sobel', src, null, null, this._fbo[2]);
+    return this._fbo[2].tex;
+  }
+
+  /* ═══════════════════════════════════════════
+     RENDER — single entry point
+  ═══════════════════════════════════════════ */
+  render(video, dt = 0.016) {
+    this.time += dt;
+
+    /* Upload video frame (UNPACK_FLIP_Y=true fixes Y orientation) */
+    const gl = this.gl;
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.bindTexture(gl.TEXTURE_2D, this._videoTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+    /* Camera mirror pass: horizontal flip into fbo[3]
+       ALL subsequent passes source from fbo[3].tex                */
+    this._draw('flip', this._videoTex, null, null, this._fbo[3]);
+    const src = this._fbo[3].tex;   /* mirrored source — used everywhere below */
+
+    /* Dispatch filter */
+    const f = this.currentFilter;
+    switch (f) {
+      case 'normal':
+        this._draw('normal', null, src, null, null);
+        break;
+
+      case 'anime': {
+        /* 4× bilateral passes for anime: produces the flat cel-shading
+           regions that make anime look like anime.
+           ponytail: yes this is 4 extra GPU passes vs cartoon's 2.
+           Ceiling: ~25fps on very low-end integrated GPU (720p). */
+        this._draw('bilH', src,              null, null, this._fbo[0]);
+        this._draw('bilV', this._fbo[0].tex, null, null, this._fbo[1]);
+        this._draw('bilH', this._fbo[1].tex, null, null, this._fbo[0]);
+        this._draw('bilV', this._fbo[0].tex, null, null, this._fbo[1]);
+        const smooth = this._fbo[1].tex;
+        /* Sobel on ORIGINAL source — preserves real edge positions */
+        const edges  = this._sobel(src);
+        this._draw('anime', smooth, smooth, edges, null);
+        break;
+      }
+      case 'cartoon': {
+        const smooth = this._bilateral(src);
+        const edges  = this._sobel(src);
+        this._draw('cartoon', smooth, smooth, edges, null);
+        break;
+      }
+      case 'sketch': {
+        const blurred = this._gaussian(src);
+        this._draw('sketch', blurred, src, null, null);
+        break;
+      }
+      case 'watercolor': {
+        const smooth = this._bilateral(src);
+        this._draw('watercolor', smooth, src, null, null);
+        break;
+      }
+      case 'neon': {
+        const blurred = this._gaussian(src);
+        const edges   = this._sobel(src);
+        this._draw('neon', blurred, src, edges, null);
+        break;
+      }
+      case 'dreamy': {
+        const blurred = this._gaussian(src);
+        this._draw('dreamy', blurred, src, null, null);
+        break;
+      }
+      case 'cyberpunk': {
+        const edges = this._sobel(src);
+        this._draw('cyberpunk', null, src, edges, null);
+        break;
+      }
+      /* Single-pass filters that only need src */
+      default:
+        this._draw(f, src, src, null, null);
+        break;
+    }
+  }
+
+  /* ponytail: instant switch, no crossfade (crossfade was the _renderTarget bug source) */
+  switchFilter(name) { this.currentFilter = name; }
+}
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: utils/CameraManager.js
+ACTION: Created
+================================================================================
+/**
+ * CameraManager.js
+ * Handles webcam access and stream management
+ */
+class CameraManager {
+  constructor(videoElement) {
+    this.video      = videoElement;
+    this.stream     = null;
+    this.facingMode = 'user';
+  }
+
+  async start() {
+    const constraints = {
+      video: {
+        facingMode: this.facingMode,
+        width:     { ideal: 1280 },
+        height:    { ideal: 720 },
+        frameRate: { ideal: 30, max: 60 }
+      },
+      audio: false
+    };
+    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    this.video.srcObject = this.stream;
+    await new Promise(resolve => {
+      this.video.onloadedmetadata = () => { this.video.play(); resolve(); };
+    });
+    return true;
+  }
+
+  stop() {
+    if (this.stream) {
+      this.stream.getTracks().forEach(t => t.stop());
+      this.stream = null;
+    }
+  }
+
+  async toggleCamera() {
+    this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+    this.stop();
+    await this.start();
+  }
+
+  get width()  { return this.video.videoWidth; }
+  get height() { return this.video.videoHeight; }
+  get isReady() { return this.video.readyState === this.video.HAVE_ENOUGH_DATA; }
+}
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: utils/FPSCounter.js
+ACTION: Created
+================================================================================
+/**
+ * FPSCounter.js
+ * Tracks real-time frames per second and updates a DOM element.
+ */
+class FPSCounter {
+  constructor(el) {
+    this.el        = el;
+    this.frames    = 0;
+    this.lastTime  = performance.now();
+  }
+
+  tick() {
+    this.frames++;
+    const now   = performance.now();
+    const delta = now - this.lastTime;
+    if (delta >= 500) {
+      const fps = Math.round((this.frames * 1000) / delta);
+      this.frames   = 0;
+      this.lastTime = now;
+      this.el.textContent = `${fps} fps`;
+      const color = fps >= 25 ? '#10b981' : fps >= 15 ? '#f59e0b' : '#ef4444';
+      this.el.style.color       = color;
+      this.el.style.borderColor = `${color}40`;
+      this.el.style.background  = `${color}15`;
+    }
+  }
+}
+
+================================================================================
+TIMESTAMP: 2026-07-28 12:00:00
+FILE PATH: dist/Latest version/v1.0.0/SETUP.md
+ACTION: Created
+================================================================================
+# LiveFilters — Real-Time Camera Filter App
+# Setup & Version Info
+# Version: 1.0.0
+
+## Quick Start (No build tools needed)
+
+### Option A: npx serve (recommended)
+```bash
+npx serve a:\Antigravity\realtime-filters
+# Then open http://localhost:3000
+```
+
+### Option B: Python local server
+```bash
+cd a:\Antigravity\realtime-filters
+python -m http.server 8080
+# Then open http://localhost:8080
+```
+
+### Option C: VS Code Live Server
+- Install "Live Server" extension
+- Right-click index.html → "Open with Live Server"
+
+## ⚠️ Camera requires HTTPS or localhost
+The MediaDevices API only works on:
+- `localhost` / `127.0.0.1` (any port)
+- Sites served over HTTPS
+
+## Project Structure
+```
+realtime-filters/
+├── index.html          ← Entry point
+├── style.css           ← Fullscreen minimal UI
+├── main.js             ← Boot + render loop
+├── filters/
+│   └── FilterEngine.js ← 12 OpenCV.js filters
+└── utils/
+    ├── CameraManager.js
+    └── FPSCounter.js
+```
+
+## Filters Available
+| Filter     | Technique                              |
+|------------|----------------------------------------|
+| Normal     | Passthrough                            |
+| Anime      | Bilateral + adaptive threshold + HSV   |
+| Cartoon    | Multi-pass bilateral + Canny edges     |
+| Sketch     | Dodge-blend (blur divide)              |
+| Neon       | Canny + colorize + additive glow       |
+| Oil Paint  | Mode-based color quantization (pure JS)|
+| Watercolor | Bilateral + median + saturation boost  |
+| Vintage    | Sepia + vignette + film grain          |
+| Pixel Art  | Block downsampling (pure JS)           |
+| Emboss     | Convolution kernel filter2D            |
+| Thermal    | COLORMAP_JET applyColorMap             |
+| Glitch     | Slice shift + RGB channel split        |
+
+## Dependencies (all CDN, no install)
+- OpenCV.js 4.8.0 — https://docs.opencv.org/4.8.0/opencv.js
+- Inter font — Google Fonts
+
+## Tech
+- HTML5 + CSS3 + Vanilla JS
+- WebRTC / MediaDevices API
+- HTML5 Canvas API
+- OpenCV.js (WebAssembly)
+- Zero paid APIs, zero build step required
